@@ -278,7 +278,7 @@ function moveCamera(deltaX, deltaY) {
     // Moving mouse right (positive deltaX) should move camera left in world space (relative to screen)
     // Moving mouse down (positive deltaY) should move camera up in world space (relative to screen)
     const moveVector = new THREE.Vector3();
-    moveVector.addScaledVector(right, -deltaX * worldUnitsPerPixel);
+    moveVector.addScaledVector(right, deltaX * worldUnitsPerPixel);
     moveVector.addScaledVector(forward, deltaY * worldUnitsPerPixel); // Adjust if direction feels wrong
 
     // Apply the movement to the camera's position
@@ -289,32 +289,7 @@ function moveCamera(deltaX, deltaY) {
 }
 
 function clampCameraPosition() {
-    const mapLimit = MAP_SIZE * TILE_SIZE / 2;
-
-    // Calculate the approximate viewable size in world units on the ground plane.
-    // This is an approximation because the orthographic view is angled.
-    const aspect = camera.right / camera.top; // Assuming left/bottom are negative right/top
-    const viewHeightWorld = camera.top - camera.bottom;
-    // Estimate projection onto ground plane (very rough)
-    const projectedViewHeight = viewHeightWorld / Math.abs(Math.sin(camera.rotation.x));
-    const projectedViewWidth = viewHeightWorld * aspect; // Width is less affected by vertical angle
-
-    // Calculate clamping limits based on camera center
-    // Allow camera center to move such that the *edge* of the view touches the map edge
-    const marginX = projectedViewWidth / 2;
-    const marginZ = projectedViewHeight / 2; // Use the projected height for Z clamping
-
-    const minCamX = -mapLimit + marginX;
-    const maxCamX = mapLimit - marginX;
-    const minCamZ = -mapLimit + marginZ;
-    const maxCamZ = mapLimit - marginZ;
-
-    camera.position.x = Math.max(minCamX, Math.min(maxCamX, camera.position.x));
-    camera.position.z = Math.max(minCamZ, Math.min(maxCamZ, camera.position.z));
-
-    // We also need to ensure the camera looks at a point on the map after clamping
-    // This simple clamping might slightly shift the lookAt point, but should keep map in view.
-    // For perfect clamping, you'd calculate the exact intersection of view frustum edges with y=0 plane.
+    
 }
 
 
