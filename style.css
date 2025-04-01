@@ -1,4 +1,19 @@
-html {
-  height: 100%;
-  width: 100%;
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Prevent scroll bars */
+    background-color: #000; /* Background outside the canvas */
+    font-family: sans-serif; /* Basic font */
+}
+
+#game-container {
+    position: fixed; /* Use fixed to ensure it covers viewport */
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+canvas {
+    display: block; /* Remove potential extra space below canvas */
 }
