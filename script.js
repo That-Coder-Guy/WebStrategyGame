@@ -6,7 +6,7 @@ const MAP_SIZE = 64; // As requested (Warning: Performance intensive!)
 const TILE_SIZE = 1;   // Size of each square tile in world units
 const NOISE_SCALE = 100; // Controls the "zoom" level of the Perlin noise. Larger = larger features.
 const CAMERA_FRUSTUM_SIZE = 100; // Determines the initial "zoom" level of the orthographic camera
-const CAMERA_ANGLE_X = -Math.PI / 6; // Angle down towards the ground (approx 30 degrees)
+const CAMERA_ANGLE_X = -Math.PI / 4; // Angle down towards the ground (approx 30 degrees)
 const CAMERA_ANGLE_Y = Math.PI / 4;  // Angle sideways (approx 45 degrees) for isometric view
 const DAY_NIGHT_SPEED = 0.0001; // Speed of the directional light rotation
 
@@ -23,13 +23,15 @@ const TILE_TYPES = {
 let scene, camera, renderer, noiseGenerator;
 let directionalLight;
 let mapGroup; // To hold all map tiles for easier management
+let clock; // Added for FPS calculation
+let fpsCounterElement; // Added for displaying FPS
 
 // Mouse/Touch Dragging State
 let isDragging = false;
 let previousMousePosition = { x: 0, y: 0 };
 
 // --- Initialization ---
-function init() {
+function start() {
     // Scene setup
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0xaaaaaa); // Light grey background
@@ -42,7 +44,35 @@ function init() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true; // Enable shadows
     renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer shadows
-    document.getElementById('game-container').appendChild(renderer.domElement);
+
+    // *** Get the container OR append directly to body ***
+    const container = document.getElementById('game-container') || document.body;
+    if (container === document.body) {
+        // Ensure body takes full screen and has no margin if using body directly
+        document.body.style.margin = "0";
+        document.body.style.overflow = "hidden";
+    }
+    container.appendChild(renderer.domElement);
+
+    // *** Add FPS Counter Element ***
+    fpsCounterElement = document.createElement('div');
+    fpsCounterElement.id = 'fps-counter';
+    // Basic Styling (you might prefer doing this in a separate CSS file)
+    fpsCounterElement.style.position = 'absolute';
+    fpsCounterElement.style.top = '10px';
+    fpsCounterElement.style.left = '10px';
+    fpsCounterElement.style.borderRadius = '5px';
+    fpsCounterElement.style.color = 'white';
+    fpsCounterElement.style.backgroundColor = 'rgba(0, 0, 0, 0.5)'; // Semi-transparent black
+    fpsCounterElement.style.padding = '5px 10px';
+    fpsCounterElement.style.fontFamily = 'sans-serif';
+    fpsCounterElement.style.fontSize = '14px';
+    fpsCounterElement.style.zIndex = '100'; // Ensure it's on top of the canvas
+    fpsCounterElement.textContent = 'FPS: --'; // Initial text
+    document.body.appendChild(fpsCounterElement); // Append to body to overlay everything
+
+    // *** Initialize Clock ***
+    clock = new THREE.Clock();
 
     // Camera setup (Orthographic)
     const aspect = window.innerWidth / window.innerHeight;
@@ -103,7 +133,7 @@ function init() {
     setupEventListeners();
 
     // Start the animation loop
-    animate();
+    update();
 }
 
 // --- Map Generation ---
@@ -155,8 +185,36 @@ function generateMap() {
             }
 
             // Create tile mesh
+            // *** IMPORTANT: Adjust elevation slightly based on noise for smoother terrain ***
+            // Let's make the height transition smoother within a tile type range
+            let heightVariation = 0;
+            if (currentTileType !== TILE_TYPES.WATER) {
+                 // Find the minHeight of the *next* lower tile type (or 0 if water)
+                 let lowerBound = 0;
+                 const currentTypeIndex = typeKeys.indexOf(Object.keys(materials).find(key => materials[key] === material));
+                 if (currentTypeIndex < typeKeys.length - 1) {
+                     lowerBound = TILE_TYPES[typeKeys[currentTypeIndex + 1]].minHeight;
+                 }
+                 // Normalize noiseValue within the current tile's range
+                 const normalizedHeight = (noiseValue - currentTileType.minHeight) / (1 - currentTileType.minHeight); // Simple normalization
+                 heightVariation = normalizedHeight * 0.3; // Adjust the multiplier for variation strength
+            }
+
+            const finalElevation = elevation + heightVariation;
+            // *** Scale the tile height based on elevation difference ***
+            let tileHeight = TILE_SIZE; // Default
+            if (currentTileType !== TILE_TYPES.WATER) {
+                // Make tiles taller for higher ground to fill gaps, relative to water level
+                 tileHeight = TILE_SIZE + (finalElevation - TILE_TYPES.WATER.baseElevation) ;
+            } else {
+                 tileHeight = TILE_SIZE * 0.2; // Make water tiles thin
+            }
+
+
+            // Use a single BoxGeometry and scale it - more efficient
             const tileMesh = new THREE.Mesh(tileGeometry, material);
-            tileMesh.position.set(worldX, elevation - TILE_SIZE / 2, worldZ); // Position base at elevation
+            tileMesh.scale.y = tileHeight / TILE_SIZE; // Scale Y based on calculated height
+            tileMesh.position.set(worldX, finalElevation - (tileHeight/2 - TILE_SIZE/2), worldZ); // Adjust Y position so top is at finalElevation
             tileMesh.castShadow = true;
             tileMesh.receiveShadow = true;
             mapGroup.add(tileMesh);
@@ -171,8 +229,11 @@ function generateMap() {
                 const trunkMesh = new THREE.Mesh(trunkGeometry, trunkMaterial);
                 const leavesMesh = new THREE.Mesh(leavesGeometry, leavesMaterial);
 
-                trunkMesh.position.set(worldX, elevation + trunkHeight / 2, worldZ);
-                leavesMesh.position.set(worldX, elevation + trunkHeight + leavesHeight / 2, worldZ);
+                 // Position tree relative to the top of the scaled tile
+                const treeBaseY = finalElevation + TILE_SIZE/2; // Top surface of the base tile
+                trunkMesh.position.set(worldX, treeBaseY + trunkHeight / 2, worldZ);
+                leavesMesh.position.set(worldX, treeBaseY + trunkHeight + leavesHeight / 2, worldZ);
+
 
                 trunkMesh.castShadow = true;
                 leavesMesh.castShadow = true;
@@ -184,8 +245,8 @@ function generateMap() {
             }
         }
          // Provide progress update for large maps
-        if (x % 100 === 0 && x > 0) {
-             console.log(`Generated column ${x}/${MAP_SIZE}`);
+        if (x % (MAP_SIZE/10) === 0 && x > 0) { // Update more frequently
+             console.log(`Generating map... ${Math.round((x/MAP_SIZE)*100)}%`);
         }
     }
 
@@ -202,11 +263,14 @@ function setupEventListeners() {
     domElement.addEventListener('mouseup', onMouseUp, false);
     domElement.addEventListener('mouseleave', onMouseUp, false); // Treat leave as mouse up
 
-    domElement.addEventListener('touchstart', onTouchStart, false);
-    domElement.addEventListener('touchmove', onTouchMove, false);
+    domElement.addEventListener('touchstart', onTouchStart, { passive: false }); // Add passive: false if preventing default scroll
+    domElement.addEventListener('touchmove', onTouchMove, { passive: false }); // Add passive: false if preventing default scroll
     domElement.addEventListener('touchend', onTouchEnd, false);
 
     window.addEventListener('resize', onWindowResize, false);
+
+    // Add Wheel listener for zooming
+    domElement.addEventListener('wheel', onMouseWheel, { passive: false });
 }
 
 function onMouseDown(event) {
@@ -218,8 +282,8 @@ function onMouseDown(event) {
 function onMouseMove(event) {
     if (!isDragging) return;
 
-    const deltaX = event.clientX - previousMousePosition.x;
-    const deltaY = event.clientY - previousMousePosition.y;
+    const deltaX = previousMousePosition.x - event.clientX;
+    const deltaY = previousMousePosition.y - event.clientY;
 
     moveCamera(deltaX, deltaY);
 
@@ -234,14 +298,17 @@ function onMouseUp() {
 // --- Touch Events ---
 function onTouchStart(event) {
     if (event.touches.length === 1) { // Handle single touch for panning
+        // event.preventDefault(); // Prevent default scroll/zoom behavior
         isDragging = true;
         previousMousePosition.x = event.touches[0].clientX;
         previousMousePosition.y = event.touches[0].clientY;
     }
+    // Basic Pinch-to-Zoom could be added here by tracking two touches
 }
 
 function onTouchMove(event) {
     if (!isDragging || event.touches.length !== 1) return;
+    // event.preventDefault(); // Prevent default scroll/zoom behavior
 
     const deltaX = event.touches[0].clientX - previousMousePosition.x;
     const deltaY = event.touches[0].clientY - previousMousePosition.y;
@@ -259,70 +326,126 @@ function onTouchEnd(event) {
     }
 }
 
-
-// --- Camera Movement ---
+// --- Camera Movement & Zoom ---
 function moveCamera(deltaX, deltaY) {
      // Calculate world units per pixel based on camera's current view height
-    const worldUnitsPerPixel = (camera.top - camera.bottom) / window.innerHeight;
+    const worldUnitsPerPixelY = (camera.top - camera.bottom) / window.innerHeight;
+    const worldUnitsPerPixelX = (camera.right - camera.left) / window.innerWidth;
+
 
     // Calculate movement vectors based on camera's orientation projected onto the ground plane (XZ)
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward);
-    forward.y = 0; // Project onto XZ plane
-    forward.normalize();
+    const forwardProj = new THREE.Vector3();
+    camera.getWorldDirection(forwardProj);
+    forwardProj.y = 0; // Project onto XZ plane
+    forwardProj.normalize();
 
-    const right = new THREE.Vector3();
-    right.crossVectors(camera.up, forward).normalize(); // Camera's right vector projected onto XZ
+    const rightProj = new THREE.Vector3();
+    // Create a camera 'right' vector projected onto the XZ plane
+    rightProj.crossVectors(camera.up, forwardProj).normalize(); // This might point left depending on camera setup, reverse if needed
+    // Note: camera.up is usually (0,1,0). If camera rolls, this needs adjustment.
 
     // Calculate the displacement vector
-    // Moving mouse right (positive deltaX) should move camera left in world space (relative to screen)
-    // Moving mouse down (positive deltaY) should move camera up in world space (relative to screen)
-    const moveVector = new THREE.Vector3();
-    moveVector.addScaledVector(right, deltaX * worldUnitsPerPixel);
-    moveVector.addScaledVector(forward, deltaY * worldUnitsPerPixel); // Adjust if direction feels wrong
+    // Moving mouse right (positive deltaX) should move view right -> camera position moves left relative to scene FORWARD
+    // Moving mouse down (positive deltaY) should move view down -> camera position moves backward relative to scene FORWARD
 
-    // Apply the movement to the camera's position
+    const moveVector = new THREE.Vector3();
+    // Adjust the scaling factor if movement feels too fast/slow
+    const moveSpeedFactor = 1.0;
+    moveVector.addScaledVector(rightProj, -deltaX * worldUnitsPerPixelX * moveSpeedFactor); // Negative deltaX moves camera along positive rightProj
+    moveVector.addScaledVector(forwardProj, -deltaY * worldUnitsPerPixelY * moveSpeedFactor); // Negative deltaY moves camera along positive forwardProj
+
+
+    // Apply the movement to the camera's position AND the target it looks at
     camera.position.add(moveVector);
 
-    // --- Boundary Clamping ---
-    clampCameraPosition();
+    // --- Boundary Clamping (Optional but recommended) ---
+    // clampCameraPosition(); // Implement this if needed
 }
+
+function onMouseWheel(event) {
+    event.preventDefault(); // Prevent page scroll
+
+    const zoomFactor = 0.1; // How much to zoom per wheel tick
+    const zoomAmount = event.deltaY < 0 ? (1 - zoomFactor) : (1 + zoomFactor); // Zoom in or out
+
+    // Adjust camera frustum size
+    camera.left *= zoomAmount;
+    camera.right *= zoomFactor;
+    camera.top *= zoomAmount;
+    camera.bottom *= zoomAmount;
+
+     // Clamp zoom levels
+    const minZoomHeight = 10; // Minimum orthographic height
+    const maxZoomHeight = MAP_SIZE * TILE_SIZE * 1.5; // Maximum orthographic height
+    camera.top = Math.max(minZoomHeight / 2, Math.min(maxZoomHeight / 2, camera.top));
+    camera.bottom = -camera.top;
+    // Maintain aspect ratio after clamping top/bottom
+    const aspect = window.innerWidth / window.innerHeight;
+    camera.left = camera.bottom * aspect;
+    camera.right = camera.top * aspect;
+
+
+    camera.updateProjectionMatrix(); // Crucial after changing frustum!
+
+    // Optional: Adjust directional light shadow camera size based on zoom?
+    // Can become complex. For now, leave it fixed.
+}
+
 
 function clampCameraPosition() {
-    
+    // Placeholder for boundary clamping logic if you want to prevent
+    // the camera from moving too far away from the map center.
+    // You'd calculate the visible map bounds based on the current zoom
+    // and prevent camera.position from going beyond those limits.
 }
-
 
 // --- Window Resize ---
 function onWindowResize() {
     const aspect = window.innerWidth / window.innerHeight;
-    camera.left = CAMERA_FRUSTUM_SIZE * aspect / -2;
-    camera.right = CAMERA_FRUSTUM_SIZE * aspect / 2;
-    camera.top = CAMERA_FRUSTUM_SIZE / 2;
-    camera.bottom = CAMERA_FRUSTUM_SIZE / -2;
+
+    // Preserve the current zoom level (view height) while adjusting width
+    const currentHeight = camera.top - camera.bottom;
+    camera.top = currentHeight / 2;
+    camera.bottom = -currentHeight / 2;
+    camera.left = camera.bottom * aspect;
+    camera.right = camera.top * aspect;
+
     camera.updateProjectionMatrix(); // Important after changing frustum!
 
     renderer.setSize(window.innerWidth, window.innerHeight);
-    clampCameraPosition(); // Re-clamp in case aspect ratio change affects boundary visibility
+    // clampCameraPosition(); // Re-clamp if implemented
 }
 
 
 // --- Animation Loop ---
-function animate() {
-    requestAnimationFrame(animate); // Request next frame
+function update() {
+    requestAnimationFrame(update); // Request next frame
+
+    // *** Calculate Delta Time and FPS ***
+    const deltaTime = clock.getDelta(); // Time since last frame in seconds
+    const fps = 1 / deltaTime;
+    // Update the counter text, rounding FPS to an integer
+    fpsCounterElement.textContent = `FPS: ${Math.round(fps)}`;
+
 
     // Day/Night Cycle: Rotate the directional light
     const time = Date.now() * DAY_NIGHT_SPEED;
     const lightDistance = MAP_SIZE * 0.7; // Keep light orbiting outside the core map area
     directionalLight.position.x = Math.sin(time) * lightDistance;
-    directionalLight.position.z = Math.cos(time) * lightDistance;
-    // Optional: Vary height slightly for sunrise/sunset effect
-    directionalLight.position.y = MAP_SIZE * 0.5 + Math.sin(time * 0.5) * MAP_SIZE * 0.2;
-    directionalLight.target.position.set(0, 0, 0); // Keep targeting center
+    // Make the light rise and set more realistically (higher at midday)
+    directionalLight.position.y = Math.abs(Math.cos(time)) * lightDistance * 1.5; // Higher peak
+    directionalLight.position.z = Math.cos(time) * lightDistance; // East-West movement
+
+
+    // Keep light targetting the center (or adjust if camera moves significantly)
+    // If camera pans a lot, you might want the light to target camera.lookAt point
+     directionalLight.target.position.copy(camera.position).add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(10)); // Target slightly ahead of camera
+     directionalLight.target.y = 0; // Keep target on the ground plane
+
 
     // Render the scene
     renderer.render(scene, camera);
 }
 
-// --- Start the application ---
-init();
+// Assuming THREE and SimplexNoise are available globally
+start();
