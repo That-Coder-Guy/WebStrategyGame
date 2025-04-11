@@ -2,15 +2,13 @@
 'use strict';
 
 // --- Configuration ---
-const MAP_SIZE = 64; // Total map size
-const CHUNK_SIZE = 16; // Size of each chunk
+const MAP_SIZE = 64; // As requested (Warning: Performance intensive!)
 const TILE_SIZE = 1;   // Size of each square tile in world units
-const NOISE_SCALE = 100; // Controls the "zoom" level of the Perlin noise
+const NOISE_SCALE = 100; // Controls the "zoom" level of the Perlin noise. Larger = larger features.
 const CAMERA_FRUSTUM_SIZE = 100; // Determines the initial "zoom" level of the orthographic camera
-const CAMERA_ANGLE_X = -Math.PI / 4; // Angle down towards the ground
-const CAMERA_ANGLE_Y = Math.PI / 4;  // Angle sideways for isometric view
+const CAMERA_ANGLE_X = -Math.PI / 4; // Angle down towards the ground (approx 30 degrees)
+const CAMERA_ANGLE_Y = Math.PI / 4;  // Angle sideways (approx 45 degrees) for isometric view
 const DAY_NIGHT_SPEED = 0.0001; // Speed of the directional light rotation
-const RENDER_DISTANCE = 3; // Number of chunks to render in each direction
 
 // Tile type definitions (ordered by elevation)
 const TILE_TYPES = {
@@ -24,10 +22,9 @@ const TILE_TYPES = {
 // --- Global Variables ---
 let scene, camera, renderer, noiseGenerator;
 let directionalLight;
-let chunks = new Map(); // Map to store chunk meshes
-let clock;
-let fpsCounterElement;
-let currentChunkCoords = { x: 0, z: 0 };
+let mapGroup; // To hold all map tiles for easier management
+let clock; // Added for FPS calculation
+let fpsCounterElement; // Added for displaying FPS
 
 // Mouse/Touch Dragging State
 let isDragging = false;
@@ -140,14 +137,10 @@ function start() {
 }
 
 // --- Map Generation ---
-function generateChunk(chunkX, chunkZ) {
-    const chunkGroup = new THREE.Group();
+function generateMap() {
+    console.log(`Generating ${MAP_SIZE}x${MAP_SIZE} map... (This may take a while)`);
+    mapGroup = new THREE.Group();
     const tileGeometry = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
-    const chunkKey = `${chunkX},${chunkZ}`;
-    
-    // Calculate world offset for this chunk
-    const worldOffsetX = chunkX * CHUNK_SIZE * TILE_SIZE;
-    const worldOffsetZ = chunkZ * CHUNK_SIZE * TILE_SIZE;
     const materials = {}; // Cache materials
 
     // Pre-create materials
@@ -166,14 +159,11 @@ function generateChunk(chunkX, chunkZ) {
     const halfMapSize = (MAP_SIZE * TILE_SIZE) / 2;
     const treeProbability = 0.4; // Chance of a tree spawning on a GRASS_TREE tile
 
-    for (let localX = 0; localX < CHUNK_SIZE; localX++) {
-        for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
-            const x = chunkX * CHUNK_SIZE + localX;
-            const z = chunkZ * CHUNK_SIZE + localZ;
-            
+    for (let x = 0; x < MAP_SIZE; x++) {
+        for (let z = 0; z < MAP_SIZE; z++) {
             // Calculate world position
-            const worldX = worldOffsetX + (localX * TILE_SIZE);
-            const worldZ = worldOffsetZ + (localZ * TILE_SIZE);
+            const worldX = (x * TILE_SIZE) - halfMapSize + TILE_SIZE / 2;
+            const worldZ = (z * TILE_SIZE) - halfMapSize + TILE_SIZE / 2;
 
             // Get Perlin noise value (normalized 0 to 1)
             const noiseValue = (noiseGenerator.noise2D(x / NOISE_SCALE, z / NOISE_SCALE) + 1) / 2;
@@ -260,45 +250,8 @@ function generateChunk(chunkX, chunkZ) {
         }
     }
 
-    scene.add(chunkGroup);
-    chunks.set(chunkKey, chunkGroup);
-    return chunkGroup;
-}
-
-function updateVisibleChunks() {
-    // Get camera chunk coordinates
-    const camChunkX = Math.floor(camera.position.x / (CHUNK_SIZE * TILE_SIZE));
-    const camChunkZ = Math.floor(camera.position.z / (CHUNK_SIZE * TILE_SIZE));
-    
-    if (camChunkX === currentChunkCoords.x && camChunkZ === currentChunkCoords.z) {
-        return; // Camera hasn't moved to a new chunk
-    }
-    
-    currentChunkCoords = { x: camChunkX, z: camChunkZ };
-    
-    // Generate/show chunks within render distance
-    for (let dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
-        for (let dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
-            const chunkX = camChunkX + dx;
-            const chunkZ = camChunkZ + dz;
-            const chunkKey = `${chunkX},${chunkZ}`;
-            
-            if (!chunks.has(chunkKey)) {
-                generateChunk(chunkX, chunkZ);
-            }
-        }
-    }
-    
-    // Remove chunks outside render distance
-    for (const [key, chunk] of chunks) {
-        const [x, z] = key.split(',').map(Number);
-        if (Math.abs(x - camChunkX) > RENDER_DISTANCE || 
-            Math.abs(z - camChunkZ) > RENDER_DISTANCE) {
-            scene.remove(chunk);
-            chunks.delete(key);
-        }
-    }
-}
+    scene.add(mapGroup);
+    console.log("Map generation complete.");
 }
 
 
@@ -466,8 +419,7 @@ function onWindowResize() {
 
 // --- Animation Loop ---
 function update() {
-    requestAnimationFrame(update);
-    updateVisibleChunks(); // Request next frame
+    requestAnimationFrame(update); // Request next frame
 
     // *** Calculate Delta Time and FPS ***
     const deltaTime = clock.getDelta(); // Time since last frame in seconds
@@ -495,24 +447,5 @@ function update() {
     renderer.render(scene, camera);
 }
 
-// Generate initial chunks around origin
-function start() {
-    // Initialize scene, camera, etc.
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xaaaaaa);
-    noiseGenerator = new SimplexNoise();
-    
-    // Set up renderer, camera, and other components as before...
-    
-    // Generate initial chunks
-    for (let x = -RENDER_DISTANCE; x <= RENDER_DISTANCE; x++) {
-        for (let z = -RENDER_DISTANCE; z <= RENDER_DISTANCE; z++) {
-            generateChunk(x, z);
-        }
-    }
-    
-    update();
-}
-
-// Start the application
+// Assuming THREE and SimplexNoise are available globally
 start();
